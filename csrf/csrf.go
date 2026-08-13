@@ -8,15 +8,27 @@ import (
 )
 
 type Config struct {
-	Key    []byte
-	Secure bool
+	Key            []byte
+	Secure         bool
+	TrustedOrigins []string
 }
 
 func Protect(config Config, next http.Handler) http.Handler {
-	middleware := gorillacsrf.Protect(
-		config.Key,
+	options := []gorillacsrf.Option{
 		gorillacsrf.Secure(config.Secure),
 		gorillacsrf.SameSite(gorillacsrf.SameSiteLaxMode),
+	}
+
+	if len(config.TrustedOrigins) > 0 {
+		options = append(
+			options,
+			gorillacsrf.TrustedOrigins(config.TrustedOrigins),
+		)
+	}
+
+	middleware := gorillacsrf.Protect(
+		config.Key,
+		options...,
 	)
 
 	return middleware(next)
