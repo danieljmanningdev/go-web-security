@@ -3,40 +3,39 @@ package csrf
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
-func TestProtectAllowsSafeRequest(t *testing.T) {
-	key := []byte("01234567890123456789012345678901")
-
+func TestProtectAllowsSameOriginPost(t *testing.T) {
 	nextCalled := false
 
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	next := http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
 		nextCalled = true
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := Protect(
-		Config{
-			Key:    key,
-			Secure: false,
-		},
-		next,
-	)
+	handler, err := Protect(Config{}, next)
+	if err != nil {
+		t.Fatalf("create protection: %v", err)
+	}
 
 	req := httptest.NewRequest(
-		http.MethodGet,
-		"/",
+		http.MethodPost,
+		"http://example.com/login",
 		nil,
 	)
+
+	req.Header.Set("Origin", "http://example.com")
 
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
 	if !nextCalled {
-		t.Fatal("expected next handler to be called")
+		t.Fatal("expected same-origin request to be allowed")
 	}
 
 	if rec.Code != http.StatusOK {
@@ -48,33 +47,30 @@ func TestProtectAllowsSafeRequest(t *testing.T) {
 	}
 }
 
-func TestProtectRejectsUnsafeRequestWithoutToken(t *testing.T) {
-	key := []byte("01234567890123456789012345678901")
-
+func TestProtectRejectsCrossOriginPost(t *testing.T) {
 	nextCalled := false
 
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	next := http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
 		nextCalled = true
-		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := Protect(
-		Config{
-			Key:    key,
-			Secure: false,
-		},
-		next,
-	)
+	handler, err := Protect(Config{}, next)
+	if err != nil {
+		t.Fatalf("create protection: %v", err)
+	}
 
 	req := httptest.NewRequest(
 		http.MethodPost,
-		"/submit",
-		strings.NewReader("name=Daniel"),
+		"http://example.com/login",
+		nil,
 	)
 
 	req.Header.Set(
-		"Content-Type",
-		"application/x-www-form-urlencoded",
+		"Origin",
+		"http://evil.example",
 	)
 
 	rec := httptest.NewRecorder()
@@ -82,7 +78,7 @@ func TestProtectRejectsUnsafeRequestWithoutToken(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	if nextCalled {
-		t.Fatal("expected request without CSRF token to be rejected")
+		t.Fatal("expected cross-origin request to be rejected")
 	}
 
 	if rec.Code != http.StatusForbidden {
@@ -94,78 +90,97 @@ func TestProtectRejectsUnsafeRequestWithoutToken(t *testing.T) {
 	}
 }
 
-func TestTokenReturnsToken(t *testing.T) {
-	key := []byte("01234567890123456789012345678901")
+func TestProtectAllowsSafeCrossOriginGet(t *testing.T) {
+	nextCalled := false
 
-	var token string
-
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token = Token(r)
+	next := http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		nextCalled = true
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := Protect(
-		Config{
-			Key:    key,
-			Secure: false,
-		},
-		next,
-	)
+	handler, err := Protect(Config{}, next)
+	if err != nil {
+		t.Fatalf("create protection: %v", err)
+	}
 
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/form",
+		"http://example.com/",
 		nil,
+	)
+
+	req.Header.Set(
+		"Origin",
+		"http://evil.example",
 	)
 
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
-	if token == "" {
-		t.Fatal("expected CSRF token to be generated")
+	if !nextCalled {
+		t.Fatal("expected safe GET request to be allowed")
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusOK,
+			rec.Code,
+		)
 	}
 }
 
-func TestTemplateFieldReturnsHiddenInput(t *testing.T) {
-	key := []byte("01234567890123456789012345678901")
+func TestProtectAllowsTrustedOrigin(t *testing.T) {
+	nextCalled := false
 
-	var field string
-
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		field = string(TemplateField(r))
+	next := http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		nextCalled = true
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := Protect(
+	handler, err := Protect(
 		Config{
-			Key:    key,
-			Secure: false,
+			TrustedOrigins: []string{
+				"http://localhost:8080",
+			},
 		},
 		next,
 	)
+	if err != nil {
+		t.Fatalf("create protection: %v", err)
+	}
 
 	req := httptest.NewRequest(
-		http.MethodGet,
-		"/form",
+		http.MethodPost,
+		"http://example.com/login",
 		nil,
+	)
+
+	req.Header.Set(
+		"Origin",
+		"http://localhost:8080",
 	)
 
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
-	if !strings.Contains(field, `type="hidden"`) {
-		t.Fatalf(
-			"expected hidden CSRF input, got %q",
-			field,
-		)
+	if !nextCalled {
+		t.Fatal("expected trusted origin to be allowed")
 	}
 
-	if !strings.Contains(field, "gorilla.csrf.Token") {
+	if rec.Code != http.StatusOK {
 		t.Fatalf(
-			"expected CSRF field name, got %q",
-			field,
+			"expected status %d, got %d",
+			http.StatusOK,
+			rec.Code,
 		)
 	}
 }
