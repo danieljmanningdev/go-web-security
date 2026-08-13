@@ -2,23 +2,24 @@
 
 Reusable security middleware for Go web applications.
 
-`go-web-security` provides a small set of security-focused packages that can be added to server-rendered Go applications without coupling them to authentication, sessions, or application-specific business logic.
+`go-web-security` provides a small set of security-focused packages for server-rendered Go applications without coupling them to authentication, sessions, or application-specific business logic.
 
 It is designed to work alongside [`go-web-core`](https://github.com/danieljmanningdev/go-web-core), but can also be used independently.
 
 ## Features
 
-* CSRF protection using `github.com/gorilla/csrf`
+* Cross-origin request protection using Go's standard library
 * Secure HTTP response headers
 * Panic recovery middleware
-* HTMX-compatible CSRF usage
-* Configurable secure-cookie behaviour
+* Configurable trusted origins
+* No application-managed CSRF secrets or tokens
 * Automated tests for core security behaviour
+* Compatible with Go's vulnerability tooling
 
 ## Installation
 
 ```bash
-go get github.com/danieljmanningdev/go-web-security@v0.1.0
+go get github.com/danieljmanningdev/go-web-security@v0.2.0
 ```
 
 ## Packages
@@ -88,71 +89,77 @@ handler := recovery.Middleware(
 
 ### `csrf`
 
-Provides a small wrapper around `github.com/gorilla/csrf`.
+Provides a small wrapper around Go's standard-library `http.CrossOriginProtection`.
+
+The protection rejects unsafe cross-origin browser requests while allowing same-origin requests and safe methods such as `GET`, `HEAD`, and `OPTIONS`.
+
+Unlike the previous implementation, applications do not need to manage:
+
+```text
+CSRF secret keys
+CSRF cookies
+hidden CSRF form fields
+request tokens
+```
+
+Basic usage:
 
 ```go
-handler := csrf.Protect(
+handler, err := csrf.Protect(
+	csrf.Config{},
+	mux,
+)
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+#### Trusted origins
+
+Additional origins can be explicitly trusted when required:
+
+```go
+handler, err := csrf.Protect(
 	csrf.Config{
-		Key:    csrfKey,
-		Secure: true,
+		TrustedOrigins: []string{
+			"http://localhost:8080",
+		},
 	},
 	mux,
 )
-```
-
-The CSRF key should be a persistent 32-byte secret and should not be hardcoded into application source code.
-
-For example:
-
-```go
-csrfKey := []byte(os.Getenv("CSRF_KEY"))
-```
-
-In production:
-
-```go
-csrf.Config{
-	Key:    csrfKey,
-	Secure: true,
+if err != nil {
+	log.Fatal(err)
 }
 ```
 
-For local development over plain HTTP:
+Trusted origins should only contain origins that the application intentionally allows to make unsafe requests.
+
+For example, a local development configuration might use:
 
 ```go
-csrf.Config{
-	Key:    csrfKey,
-	Secure: false,
+csrfConfig := csrf.Config{
+	TrustedOrigins: []string{
+		"http://localhost:8080",
+		"http://127.0.0.1:8080",
+	},
 }
 ```
 
-#### Tokens
+Production applications should configure only the origins they actually require.
 
-Retrieve the current request token:
+#### Forms
 
-```go
-token := csrf.Token(r)
-```
+No special hidden CSRF field is required.
 
-Retrieve a ready-to-render hidden form field:
-
-```go
-field := csrf.TemplateField(r)
-```
-
-This can be passed into a Go template and included inside state-changing forms.
-
-For example:
+A normal server-rendered form can remain:
 
 ```html
 <form method="post" action="/account">
-	{{ .CSRFField }}
-
 	<button type="submit">Save</button>
 </form>
 ```
 
-Unsafe requests such as `POST`, `PUT`, `PATCH`, and `DELETE` are rejected when they do not contain a valid CSRF token.
+Cross-origin protection is applied by middleware before unsafe requests reach the application handler.
 
 ## Example
 
@@ -179,22 +186,29 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
 		_, _ = w.Write([]byte("hello"))
 	})
 
-	handler := headers.Secure(mux)
+	var handler http.Handler = mux
+
+	csrfHandler, err := csrf.Protect(
+		csrf.Config{},
+		handler,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	handler = csrfHandler
+
+	handler = headers.Secure(handler)
 
 	handler = recovery.Middleware(
 		logger,
-		handler,
-	)
-
-	handler = csrf.Protect(
-		csrf.Config{
-			Key:    []byte(os.Getenv("CSRF_KEY")),
-			Secure: true,
-		},
 		handler,
 	)
 
@@ -214,23 +228,26 @@ Middleware wraps from the outside in.
 For example:
 
 ```go
-handler := headers.Secure(mux)
+var handler http.Handler = mux
+
+csrfHandler, err := csrf.Protect(
+	csrf.Config{},
+	handler,
+)
+if err != nil {
+	log.Fatal(err)
+}
+
+handler = csrfHandler
+handler = headers.Secure(handler)
 
 handler = recovery.Middleware(
 	logger,
 	handler,
 )
-
-handler = csrf.Protect(
-	csrf.Config{
-		Key:    csrfKey,
-		Secure: true,
-	},
-	handler,
-)
 ```
 
-The final `handler` is then passed to the HTTP server.
+The final `handler` is passed to the HTTP server.
 
 The exact middleware stack can vary depending on the application.
 
@@ -241,6 +258,8 @@ This project is deliberately small.
 It provides reusable security primitives without trying to become a complete authentication or security framework.
 
 Authentication, users, sessions, password management, permissions, application-specific authorization, and business rules should live in separate packages or applications.
+
+Where suitable security functionality exists in Go's standard library, this project prefers building on that rather than maintaining unnecessary custom security implementations.
 
 The goal is simple:
 
@@ -266,11 +285,19 @@ Run static analysis:
 go vet ./...
 ```
 
+Check for known vulnerabilities:
+
+```bash
+govulncheck ./...
+```
+
 Check whitespace errors:
 
 ```bash
 git diff --check
 ```
+
+A clean release should pass all four checks.
 
 ## Status
 
@@ -281,7 +308,7 @@ Until the API stabilises, releases should be considered pre-`v1.0.0` and may con
 Current release:
 
 ```text
-v0.1.0
+v0.2.0
 ```
 
 ## License
