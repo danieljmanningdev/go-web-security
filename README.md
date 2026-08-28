@@ -1,5 +1,7 @@
 # go-web-security
 
+[![CI](https://github.com/danieljmanningdev/go-web-security/actions/workflows/ci.yml/badge.svg)](https://github.com/danieljmanningdev/go-web-security/actions/workflows/ci.yml)
+
 Reusable security middleware for Go web applications.
 
 `go-web-security` provides a small set of security-focused packages for server-rendered Go applications without coupling them to authentication, sessions, or application-specific business logic.
